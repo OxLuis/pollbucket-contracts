@@ -24,4 +24,8 @@ interface IJurySystem {
     function getJurorVote(uint256 _poolId, address _juror) external view returns (uint256, bool);
     function getJurorAssignments(address _juror) external view returns (uint256[] memory);
     function isJurorAssigned(uint256 _poolId, address _juror) external view returns (bool);
+    
+    // Funciones de conflicto de interés
+    function hasConflictOfInterest(uint256 _poolId, address _juror) external view returns (bool hasConflict, string memory reason);
+    function getConflictStats(uint256 _poolId) external view returns (uint256 totalEligible, uint256 conflicted, uint256 available);
 }

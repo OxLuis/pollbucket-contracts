@@ -88,6 +88,9 @@ async function main() {
   const minimumFixedBet = await pollPool.minimumFixedBetAmount();
   console.log("      Monto mínimo por voto:", ethers.utils.formatEther(minimumFixedBet), "AVAX");
   
+  const minStakeRequired = await reputationSystem.getMinStakeRequired();
+  console.log("      Stake mínimo para jurados:", ethers.utils.formatEther(minStakeRequired), "AVAX");
+  
   const activeJurors = await reputationSystem.getActiveJurorsCount();
   console.log("      Jurados activos:", activeJurors.toString());
   

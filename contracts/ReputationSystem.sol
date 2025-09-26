@@ -24,7 +24,9 @@ contract ReputationSystem is Ownable {
     uint256 public constant MAX_REPUTATION = 1000;
     uint256 public constant REPUTATION_GAIN = 10;
     uint256 public constant REPUTATION_LOSS = 15;
-    uint256 public constant MIN_STAKE_REQUIRED = 0.05 ether;
+    
+    // Configurable by owner
+    uint256 public minStakeRequired = 0.05 ether; // Stake mínimo configurable por owner
     
     mapping(address => JurorProfile) public jurors;
     mapping(address => bool) public authorizedCallers;
@@ -36,6 +38,7 @@ contract ReputationSystem is Ownable {
     event JurorSlashed(address indexed juror, uint256 slashedAmount);
     event JurorSuspended(address indexed juror);
     event JurorReactivated(address indexed juror);
+    event MinStakeRequiredUpdated(uint256 oldAmount, uint256 newAmount);
     
     modifier onlyAuthorized() {
         require(authorizedCallers[msg.sender] || msg.sender == owner(), "No autorizado");
@@ -51,7 +54,7 @@ contract ReputationSystem is Ownable {
      * @dev Registrar como jurado con stake inicial
      */
     function registerAsJuror() external payable {
-        require(msg.value >= MIN_STAKE_REQUIRED, "Stake insuficiente");
+        require(msg.value >= minStakeRequired, "Stake insuficiente");
         require(!jurors[msg.sender].isActive, "Ya registrado como jurado");
         
         jurors[msg.sender] = JurorProfile({
@@ -133,7 +136,7 @@ contract ReputationSystem is Ownable {
         payable(owner()).transfer(slashAmount);
         
         // Suspender si el stake es muy bajo
-        if (profile.stakedAmount < MIN_STAKE_REQUIRED) {
+        if (profile.stakedAmount < minStakeRequired) {
             _suspendJuror(_juror);
         }
         
@@ -163,7 +166,7 @@ contract ReputationSystem is Ownable {
      */
     function reactivateJuror(address _juror) external onlyOwner {
         require(!jurors[_juror].isActive, "Jurado ya activo");
-        require(jurors[_juror].stakedAmount >= MIN_STAKE_REQUIRED, "Stake insuficiente");
+        require(jurors[_juror].stakedAmount >= minStakeRequired, "Stake insuficiente");
         require(jurors[_juror].reputation >= MIN_REPUTATION, "Reputacion insuficiente");
         
         jurors[_juror].isActive = true;
@@ -200,7 +203,7 @@ contract ReputationSystem is Ownable {
         for (uint256 i = 0; i < activeJurors.length && found < _count; i++) {
             address juror = activeJurors[i];
             if (jurors[juror].reputation >= _minReputation && 
-                jurors[juror].stakedAmount >= MIN_STAKE_REQUIRED) {
+                jurors[juror].stakedAmount >= minStakeRequired) {
                 eligible[found] = juror;
                 found++;
             }
@@ -226,7 +229,7 @@ contract ReputationSystem is Ownable {
     function isEligibleJuror(address _juror, uint256 _minReputation) external view returns (bool) {
         return jurors[_juror].isActive && 
                jurors[_juror].reputation >= _minReputation &&
-               jurors[_juror].stakedAmount >= MIN_STAKE_REQUIRED;
+               jurors[_juror].stakedAmount >= minStakeRequired;
     }
     
     function getActiveJurorsCount() external view returns (uint256) {
@@ -245,6 +248,24 @@ contract ReputationSystem is Ownable {
     
     function removeAuthorizedCaller(address _caller) external onlyOwner {
         authorizedCallers[_caller] = false;
+    }
+    
+    /**
+     * @dev Actualizar stake mínimo requerido para ser jurado (solo owner)
+     * @param _newMinStake Nuevo stake mínimo en AVAX
+     */
+    function setMinStakeRequired(uint256 _newMinStake) external onlyOwner {
+        require(_newMinStake > 0, "Stake minimo debe ser mayor a 0");
+        uint256 oldAmount = minStakeRequired;
+        minStakeRequired = _newMinStake;
+        emit MinStakeRequiredUpdated(oldAmount, _newMinStake);
+    }
+    
+    /**
+     * @dev Obtener stake mínimo actual
+     */
+    function getMinStakeRequired() external view returns (uint256) {
+        return minStakeRequired;
     }
     
     function updateConstants(

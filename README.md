@@ -60,6 +60,10 @@ La plataforma está compuesta por 5 contratos principales que trabajan en conjun
 - `getEligibleJurors()` - Obtener jurados elegibles para validación
 - `withdrawStake()` - Retirar stake (solo si inactivo)
 
+#### Funciones Administrativas:
+- `setMinStakeRequired()` - Configurar stake mínimo para jurados (solo owner)
+- `getMinStakeRequired()` - Consultar stake mínimo actual
+
 #### Sistema de Reputación:
 - **Reputación inicial**: 100 puntos
 - **Rango**: 0-1000 puntos
@@ -72,18 +76,23 @@ La plataforma está compuesta por 5 contratos principales que trabajan en conjun
 **Propósito**: Maneja el proceso de validación de pools a través de jurados.
 
 #### Funciones Principales:
-- `initiateValidation()` - Iniciar proceso de validación
+- `initiateValidation()` - Iniciar proceso de validación (con filtrado de conflictos)
 - `castVote()` - Votar en una validación activa
 - `distributeJurorRewards()` - Distribuir recompensas a jurados
-- `resolveTie()` - Resolver empates con jurados adicionales
+- `resolveTie()` - Resolver empates con jurados adicionales (sin conflictos)
 - `forceCompleteValidation()` - Forzar completar si tiempo vencido
 
+#### Funciones de Integridad:
+- `hasConflictOfInterest()` - Verificar si un jurado tiene conflicto con un pool
+- `getConflictStats()` - Obtener estadísticas de conflictos para un pool
+
 #### Proceso de Validación:
-1. **Asignación aleatoria** de 3-7 jurados según complejidad
-2. **Período de votación** de 24 horas
-3. **Mayoría simple** determina ganador
-4. **Resolución de empates** con jurados adicionales
-5. **Actualización automática** de reputaciones
+1. **Filtrado de conflictos** - Excluye participantes del pool como jurados
+2. **Asignación aleatoria** de 3-7 jurados según complejidad (sin conflictos)
+3. **Período de votación** de 24 horas
+4. **Mayoría simple** determina ganador
+5. **Resolución de empates** con jurados adicionales (también sin conflictos)
+6. **Actualización automática** de reputaciones
 
 ### 4. **PlatformGovernance.sol** - Administración
 **Propósito**: Administración centralizada y configuración de parámetros de la plataforma.
@@ -201,6 +210,7 @@ npx hardhat run scripts/setup-platform.js --network [red]
 - **Pausable**: Capacidad de pausar en emergencias
 - **Slashing**: Penalización por comportamiento malicioso
 - **Timeouts**: Límites de tiempo para todas las operaciones
+- **🛡️ Prevención de Conflictos**: Jurados nunca son participantes del mismo pool
 
 ### Validaciones
 - Verificación de fondos suficientes
@@ -245,6 +255,12 @@ npx hardhat run scripts/setup-platform.js --network [red]
 
 # Demo completo de información de pools
 npx hardhat run scripts/demo-pool-info.js --network [red]
+
+# Demo de prevención de conflictos de interés
+npx hardhat run scripts/demo-conflict-prevention.js --network [red]
+
+# Demo de configuración de stake para jurados
+npx hardhat run scripts/demo-juror-stake-config.js --network [red]
 
 # Verificar contratos
 npm run verify -- --network fuji [direccion_contrato]
@@ -443,10 +459,128 @@ uint256 minimum = pollPool.minimumFixedBetAmount();
 console.log("Monto mínimo:", ethers.utils.formatEther(minimum), "AVAX");
 ```
 
+## 🛡️ Prevención de Conflictos de Interés
+
+### **Problema Resuelto:**
+El sistema ahora **garantiza** que los jurados asignados para validar un pool **nunca** sean participantes del mismo pool, eliminando conflictos de interés.
+
+### **Cómo Funciona:**
+
+#### **1. Filtrado Automático:**
+```solidity
+// Antes de asignar jurados, se filtran los participantes
+address[] memory nonConflictedJurors = _filterNonParticipants(poolId, eligibleJurors);
+
+// Solo se asignan jurados que NO participaron en el pool
+```
+
+#### **2. Verificación de Conflictos:**
+```solidity
+// Verificar si un jurado tiene conflicto con un pool
+(bool hasConflict, string memory reason) = jurySystem.hasConflictOfInterest(poolId, jurorAddress);
+
+if (hasConflict) {
+    console.log("Conflicto:", reason); // "Jurado participo en el pool"
+}
+```
+
+#### **3. Estadísticas de Conflictos:**
+```solidity
+// Obtener estadísticas de disponibilidad
+(uint256 totalEligible, uint256 conflicted, uint256 available) = 
+    jurySystem.getConflictStats(poolId);
+
+console.log(`${available} jurados disponibles de ${totalEligible} elegibles`);
+console.log(`${conflicted} jurados excluidos por conflicto`);
+```
+
+### **Flujo de Integridad:**
+
+```
+🎯 Pool creado → Usuarios apuestan → Pool se cierra
+                     ↓
+🔍 Sistema busca jurados elegibles (reputación + stake)
+                     ↓
+🛡️ FILTRO: Excluye participantes del pool
+                     ↓
+🎲 Selección aleatoria de jurados SIN conflicto
+                     ↓
+⚖️ Validación imparcial garantizada
+```
+
+### **Beneficios:**
+
+- ✅ **Integridad total** - Jurados no tienen interés económico en el resultado
+- ✅ **Transparencia** - Eventos de tracking para jurados excluidos
+- ✅ **Escalabilidad** - Sistema funciona con cualquier número de participantes
+- ✅ **Robustez** - Maneja casos donde muchos jurados tienen conflictos
+- ✅ **Verificabilidad** - Funciones públicas para auditar conflictos
+
+### **Ejemplo Práctico:**
+
+```
+🏆 Pool: "¿Ganará Argentina el mundial?"
+
+👥 PARTICIPANTES (apostaron dinero):
+- Alice: 0.05 AVAX en "Sí"
+- Bob: 0.05 AVAX en "No"
+
+⚖️ JURADOS ASIGNADOS (determinan respuesta):
+- Charlie ✅ (no participó)
+- David ✅ (no participó)  
+- Eve ✅ (no participó)
+
+❌ EXCLUIDOS POR CONFLICTO:
+- Alice (participó en el pool)
+- Bob (participó en el pool)
+
+✅ RESULTADO: Validación 100% imparcial
+```
+
+## ⚙️ Configuración del Stake para Jurados
+
+### **Control Administrativo:**
+El owner del contrato puede ajustar el stake mínimo requerido para ser jurado:
+
+```solidity
+// Solo el owner puede cambiar el stake mínimo
+reputationSystem.setMinStakeRequired(ethers.utils.parseEther("0.1")); // 0.1 AVAX
+
+// Consultar stake mínimo actual
+uint256 currentStake = reputationSystem.getMinStakeRequired();
+console.log("Stake mínimo:", ethers.utils.formatEther(currentStake), "AVAX");
+```
+
+### **Impacto de los Cambios:**
+- ✅ **Nuevos registros**: Deben cumplir el nuevo mínimo
+- ✅ **Jurados existentes**: Mantienen su elegibilidad si ya cumplen
+- ✅ **Validación automática**: Sistema verifica stake en tiempo real
+- ✅ **Eventos de cambio**: Tracking completo de modificaciones
+
+### **Ejemplo de Configuración:**
+
+```javascript
+// Configuración inicial: 0.05 AVAX
+await reputationSystem.setMinStakeRequired(ethers.utils.parseEther("0.05"));
+
+// Aumentar requisitos: 0.1 AVAX  
+await reputationSystem.setMinStakeRequired(ethers.utils.parseEther("0.1"));
+
+// Para situaciones especiales: 0.2 AVAX
+await reputationSystem.setMinStakeRequired(ethers.utils.parseEther("0.2"));
+```
+
+### **Beneficios del Control Administrativo:**
+- 🎯 **Flexibilidad**: Ajustar según condiciones del mercado
+- 🛡️ **Seguridad**: Aumentar stake en caso de ataques
+- 📈 **Escalabilidad**: Reducir barreras cuando sea necesario
+- ⚖️ **Balance**: Mantener equilibrio entre accesibilidad y seguridad
+
 ## 📝 Configuración por Defecto
 
 - **Stake mínimo**: 0.1 AVAX
 - **Monto mínimo por voto**: 0.05 AVAX (configurable solo por owner)
+- **Stake mínimo para jurados**: 0.05 AVAX (configurable solo por owner)
 - **Fee de plataforma**: 3%
 - **Comisión de creadores**: 5% (configurable solo por owner, máximo 10%)
 - **Reputación mínima jurado**: 75 puntos

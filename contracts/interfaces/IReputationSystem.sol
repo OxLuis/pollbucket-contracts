@@ -30,4 +30,6 @@ interface IReputationSystem {
     
     function addAuthorizedCaller(address _caller) external;
     function removeAuthorizedCaller(address _caller) external;
+    function setMinStakeRequired(uint256 _newMinStake) external;
+    function getMinStakeRequired() external view returns (uint256);
 }

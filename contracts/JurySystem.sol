@@ -48,6 +48,7 @@ contract JurySystem is Ownable, ReentrancyGuard {
     event ValidationCompleted(uint256 indexed poolId, uint256 winningOption);
     event JurorRewarded(address indexed juror, uint256 amount);
     event ValidationDisputed(uint256 indexed poolId);
+    event JurorExcludedForConflict(uint256 indexed poolId, address indexed juror);
     
     modifier onlyPollPool() {
         require(msg.sender == address(pollPool), "Solo PollPool");
@@ -72,16 +73,19 @@ contract JurySystem is Ownable, ReentrancyGuard {
         // Determinar número de jurados necesarios
         uint256 jurorsNeeded = _calculateJurorsNeeded(options.length);
         
-        // Obtener jurados elegibles
+        // Obtener jurados elegibles (más cantidad para filtrar conflictos)
         address[] memory eligibleJurors = reputationSystem.getEligibleJurors(
             MIN_REPUTATION_REQUIRED, 
-            jurorsNeeded * 2 // Obtener más para selección aleatoria
+            jurorsNeeded * 4 // Obtener 4x más para filtrar participantes del pool
         );
         
-        require(eligibleJurors.length >= jurorsNeeded, "Jurados insuficientes");
+        // Filtrar jurados que NO participaron en este pool (evitar conflicto de interés)
+        address[] memory nonConflictedJurors = _filterNonParticipants(_poolId, eligibleJurors);
         
-        // Seleccionar jurados aleatoriamente
-        address[] memory selectedJurors = _selectRandomJurors(eligibleJurors, jurorsNeeded, _poolId);
+        require(nonConflictedJurors.length >= jurorsNeeded, "Jurados sin conflicto insuficientes");
+        
+        // Seleccionar jurados aleatoriamente de los no conflictuados
+        address[] memory selectedJurors = _selectRandomJurors(nonConflictedJurors, jurorsNeeded, _poolId);
         
         Validation storage validation = validations[_poolId];
         validation.poolId = _poolId;
@@ -223,16 +227,22 @@ contract JurySystem is Ownable, ReentrancyGuard {
         Validation storage validation = validations[_poolId];
         require(validation.status == ValidationStatus.Disputed, "No hay disputa");
         
-        // Asignar 2 jurados adicionales
-        address[] memory additionalJurors = reputationSystem.getEligibleJurors(
+        // Asignar 2 jurados adicionales sin conflicto de interés
+        address[] memory eligibleForTie = reputationSystem.getEligibleJurors(
             MIN_REPUTATION_REQUIRED + 25, // Reputación más alta para resolver empates
-            2
+            8 // Obtener más para filtrar conflictos
         );
         
-        require(additionalJurors.length >= 2, "Jurados insuficientes para resolver empate");
+        // Filtrar jurados que NO participaron en este pool
+        address[] memory nonConflictedForTie = _filterNonParticipants(_poolId, eligibleForTie);
+        
+        require(nonConflictedForTie.length >= 2, "Jurados sin conflicto insuficientes para resolver empate");
+        
+        // Seleccionar 2 jurados adicionales aleatoriamente
+        address[] memory additionalJurors = _selectRandomJurors(nonConflictedForTie, 2, _poolId + block.timestamp);
         
         // Agregar jurados adicionales
-        for (uint256 i = 0; i < 2; i++) {
+        for (uint256 i = 0; i < additionalJurors.length; i++) {
             validation.assignedJurors.push(additionalJurors[i]);
             jurorAssignments[additionalJurors[i]].push(_poolId);
         }
@@ -259,6 +269,42 @@ contract JurySystem is Ownable, ReentrancyGuard {
         if (_optionsCount <= 2) return MIN_JURORS;
         if (_optionsCount <= 4) return MIN_JURORS + 2;
         return MAX_JURORS;
+    }
+    
+    /**
+     * @dev Filtrar jurados que NO participaron en el pool para evitar conflicto de interés
+     * @param _poolId ID del pool
+     * @param _eligible Array de jurados elegibles
+     * @return nonParticipants Array de jurados que NO participaron en el pool
+     */
+    function _filterNonParticipants(uint256 _poolId, address[] memory _eligible) 
+        internal 
+        view 
+        returns (address[] memory nonParticipants) 
+    {
+        // Contar cuántos jurados NO participaron
+        uint256 nonParticipantCount = 0;
+        for (uint256 i = 0; i < _eligible.length; i++) {
+            if (!pollPool.hasUserParticipated(_poolId, _eligible[i])) {
+                nonParticipantCount++;
+            } else {
+                // Emitir evento para tracking de conflictos excluidos
+                emit JurorExcludedForConflict(_poolId, _eligible[i]);
+            }
+        }
+        
+        // Crear array con jurados sin conflicto
+        nonParticipants = new address[](nonParticipantCount);
+        uint256 index = 0;
+        
+        for (uint256 i = 0; i < _eligible.length; i++) {
+            if (!pollPool.hasUserParticipated(_poolId, _eligible[i])) {
+                nonParticipants[index] = _eligible[i];
+                index++;
+            }
+        }
+        
+        return nonParticipants;
     }
     
     function _selectRandomJurors(
@@ -331,6 +377,51 @@ iew functions
     
     function isJurorAssigned(uint256 _poolId, address _juror) external view returns (bool) {
         return _isAssignedJuror(_poolId, _juror);
+    }
+    
+    /**
+     * @dev Verificar si un jurado tiene conflicto de interés con un pool
+     * @param _poolId ID del pool
+     * @param _juror Dirección del jurado
+     * @return hasConflict Si tiene conflicto de interés
+     * @return reason Razón del conflicto
+     */
+    function hasConflictOfInterest(uint256 _poolId, address _juror) 
+        external 
+        view 
+        returns (bool hasConflict, string memory reason) 
+    {
+        if (pollPool.hasUserParticipated(_poolId, _juror)) {
+            return (true, "Jurado participo en el pool");
+        }
+        
+        return (false, "Sin conflicto de interes");
+    }
+    
+    /**
+     * @dev Obtener estadísticas de conflictos para un pool
+     * @param _poolId ID del pool
+     * @return totalEligible Total de jurados elegibles por reputación
+     * @return conflicted Jurados con conflicto de interés
+     * @return available Jurados disponibles sin conflicto
+     */
+    function getConflictStats(uint256 _poolId) 
+        external 
+        view 
+        returns (uint256 totalEligible, uint256 conflicted, uint256 available) 
+    {
+        address[] memory eligible = reputationSystem.getEligibleJurors(MIN_REPUTATION_REQUIRED, 50);
+        totalEligible = eligible.length;
+        
+        for (uint256 i = 0; i < eligible.length; i++) {
+            if (pollPool.hasUserParticipated(_poolId, eligible[i])) {
+                conflicted++;
+            } else {
+                available++;
+            }
+        }
+        
+        return (totalEligible, conflicted, available);
     }
     
     // Admin functions
