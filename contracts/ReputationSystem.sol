@@ -79,8 +79,9 @@ contract ReputationSystem is Ownable {
         require(msg.value > 0, "Debe enviar AVAX");
         
         jurors[msg.sender].stakedAmount += msg.value;
-    }  
-  /**
+    }
+    
+    /**
      * @dev Actualizar reputación después de una votación
      * @param _juror Dirección del jurado
      * @param _votedCorrectly Si votó correctamente
@@ -173,8 +174,9 @@ contract ReputationSystem is Ownable {
         activeJurors.push(_juror);
         
         emit JurorReactivated(_juror);
-    }  
-  /**
+    }
+    
+    /**
      * @dev Retirar stake (solo si no está activo como jurado)
      */
     function withdrawStake() external {

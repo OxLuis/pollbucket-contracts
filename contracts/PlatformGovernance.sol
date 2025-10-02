@@ -190,8 +190,9 @@ contract PlatformGovernance is Ownable, Pausable {
         _unpause();
         config.emergencyMode = false;
         emit EmergencyModeToggled(false);
-    }    // Vi
-ew functions
+    }
+    
+    // View functions
     function getPlatformConfig() external view returns (PlatformConfig memory) {
         return config;
     }
@@ -244,6 +245,19 @@ ew functions
         string memory statusMsg = healthy ? "Sistema operativo" : "Requiere atencion";
         
         return (healthy, statusMsg, jurorCount, config.emergencyMode);
+    }
+    
+    // Funciones de actualización de contratos
+    function updatePollPool(address _newPollPool) external onlyOwner {
+        pollPool = IPollPool(_newPollPool);
+    }
+    
+    function updateReputationSystem(address _newReputationSystem) external onlyOwner {
+        reputationSystem = IReputationSystem(_newReputationSystem);
+    }
+    
+    function updateJurySystem(address _newJurySystem) external onlyOwner {
+        jurySystem = IJurySystem(_newJurySystem);
     }
     
     // Función para recibir AVAX

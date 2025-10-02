@@ -68,7 +68,8 @@ contract JurySystem is Ownable, ReentrancyGuard {
         require(validations[_poolId].status == ValidationStatus.Pending, "Validacion ya iniciada");
         
         // Obtener pool info para determinar número de opciones
-        (,,,string[] memory options,,,,,,) = pollPool.getPool(_poolId);
+        IPollPool.Pool memory pool = pollPool.getPool(_poolId);
+        string[] memory options = pool.options;
         
         // Determinar número de jurados necesarios
         uint256 jurorsNeeded = _calculateJurorsNeeded(options.length);
@@ -103,9 +104,10 @@ contract JurySystem is Ownable, ReentrancyGuard {
         totalValidations++;
         
         emit ValidationInitiated(_poolId, selectedJurors);
-    }    /**
-  
-   * @dev Votar en una validación
+    }
+    
+    /**
+     * @dev Votar en una validación
      * @param _poolId ID del pool
      * @param _option Opción votada
      */
@@ -117,7 +119,8 @@ contract JurySystem is Ownable, ReentrancyGuard {
         require(!validation.hasVoted[msg.sender], "Ya voto");
         
         // Verificar que la opción es válida
-        (,,,string[] memory options,,,,,,) = pollPool.getPool(_poolId);
+        IPollPool.Pool memory pool = pollPool.getPool(_poolId);
+        string[] memory options = pool.options;
         require(_option < options.length, "Opcion invalida");
         
         validation.votes[msg.sender] = _option;
@@ -193,8 +196,9 @@ contract JurySystem is Ownable, ReentrancyGuard {
                 reputationSystem.updateReputation(juror, false);
             }
         }
-    } 
-   /**
+    }
+    
+    /**
      * @dev Distribuir recompensas a jurados que votaron correctamente
      */
     function distributeJurorRewards(uint256 _poolId) external payable nonReentrant {
@@ -279,7 +283,6 @@ contract JurySystem is Ownable, ReentrancyGuard {
      */
     function _filterNonParticipants(uint256 _poolId, address[] memory _eligible) 
         internal 
-        view 
         returns (address[] memory nonParticipants) 
     {
         // Contar cuántos jurados NO participaron
@@ -322,7 +325,7 @@ contract JurySystem is Ownable, ReentrancyGuard {
             do {
                 randomIndex = uint256(keccak256(abi.encodePacked(
                     block.timestamp, 
-                    block.difficulty, 
+                    block.prevrandao, 
                     _seed, 
                     i
                 ))) % _eligible.length;
@@ -341,8 +344,9 @@ contract JurySystem is Ownable, ReentrancyGuard {
             if (assigned[i] == _juror) return true;
         }
         return false;
-    }    // V
-iew functions
+    }
+    
+    // View functions
     function getValidation(uint256 _poolId) external view returns (
         uint256 poolId,
         address[] memory assignedJurors,

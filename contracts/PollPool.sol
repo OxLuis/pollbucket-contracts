@@ -614,4 +614,13 @@ contract PollPool is ReentrancyGuard, Ownable {
             _updatePoolStatusTracking(_poolId, oldStatus, PoolStatus.Cancelled);
         }
     }
+    
+    // Funciones de actualización de contratos
+    function updateReputationSystem(address _newReputationSystem) external onlyOwner {
+        reputationSystem = IReputationSystem(_newReputationSystem);
+    }
+    
+    function updateJurySystem(address _newJurySystem) external onlyOwner {
+        jurySystem = IJurySystem(_newJurySystem);
+    }
 }
