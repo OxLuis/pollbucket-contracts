@@ -48,6 +48,8 @@ contract PollPool is ReentrancyGuard, Ownable {
     uint256 public minimumFixedBetAmount = 0.05 ether; // Monto mínimo para fixedBetAmount (0.05 AVAX por defecto)
     uint256 public platformFee = 300; // 3% in basis points
     uint256 public creatorCommission = 500; // 5% in basis points - solo owner puede modificar
+    uint256 public transactionFee = 200; // 2% in basis points - comisión de transacción configurable por owner
+    address public feeRecipient; // Dirección donde se depositarán las comisiones de transacción
 
     mapping(uint256 => Pool) public pools;
     mapping(uint256 => Bet[]) public poolBets;
@@ -80,10 +82,14 @@ contract PollPool is ReentrancyGuard, Ownable {
     event PoolValidated(uint256 indexed poolId, uint256 winningOption);
     event RewardsDistributed(uint256 indexed poolId, uint256 totalRewards);
     event MinimumFixedBetAmountUpdated(uint256 oldAmount, uint256 newAmount);
+    event TransactionFeeUpdated(uint256 oldFee, uint256 newFee);
+    event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+    event TransactionFeeCollected(address indexed recipient, uint256 amount);
 
     constructor(address _reputationSystem, address _jurySystem) {
         reputationSystem = IReputationSystem(_reputationSystem);
         jurySystem = IJurySystem(_jurySystem);
+        feeRecipient = msg.sender; // Por defecto, la dirección que despliega el contrato
     }
     /**
      * @dev Crear un nuevo pool de preguntas
@@ -104,10 +110,6 @@ contract PollPool is ReentrancyGuard, Ownable {
             _fixedBetAmount >= minimumFixedBetAmount,
             "Monto fijo debe ser >= monto minimo establecido"
         );
-        require(
-            msg.value == _fixedBetAmount,
-            "Debe pagar exactamente el monto fijo establecido"
-        );
         require(_options.length >= 2, "Minimo 2 opciones requeridas");
         require(
             _closeTime > block.timestamp,
@@ -118,6 +120,16 @@ contract PollPool is ReentrancyGuard, Ownable {
             "Minimo 2 participantes si hay limite"
         );
 
+        // Calcular comisión y monto total requerido
+        (uint256 feeAmount, uint256 totalRequired) = _calculateTransactionFee(_fixedBetAmount);
+        require(
+            msg.value == totalRequired,
+            "Debe pagar el monto fijo + comision de transaccion"
+        );
+
+        // Transferir comisión
+        _transferTransactionFee(feeAmount);
+
         uint256 poolId = nextPoolId++;
 
         pools[poolId] = Pool({
@@ -127,7 +139,7 @@ contract PollPool is ReentrancyGuard, Ownable {
             options: _options,
             openTime: block.timestamp,
             closeTime: _closeTime,
-            totalStake: msg.value,
+            totalStake: _fixedBetAmount,
             creatorCommission: creatorCommission,
             status: PoolStatus.Open,
             winningOption: 0,
@@ -146,13 +158,13 @@ contract PollPool is ReentrancyGuard, Ownable {
         poolBets[poolId].push(
             Bet({
                 bettor: msg.sender,
-                amount: msg.value,
+                amount: _fixedBetAmount,
                 option: 0,
                 timestamp: block.timestamp
             })
         );
 
-        optionTotals[poolId][0] += msg.value;
+        optionTotals[poolId][0] += _fixedBetAmount;
         userPools[msg.sender].push(poolId);
         userBets[msg.sender][poolId].push(0);
         poolParticipants[poolId][msg.sender] = true;
@@ -173,10 +185,15 @@ contract PollPool is ReentrancyGuard, Ownable {
         require(pool.status == PoolStatus.Open, "Pool no esta abierto");
         require(block.timestamp < pool.closeTime, "Pool cerrado");
         require(_option < pool.options.length, "Opcion invalida");
+        // Calcular comisión y monto total requerido
+        (uint256 feeAmount, uint256 totalRequired) = _calculateTransactionFee(pool.fixedBetAmount);
         require(
-            msg.value == pool.fixedBetAmount,
-            "Debe pagar exactamente el monto fijo del pool"
+            msg.value == totalRequired,
+            "Debe pagar el monto fijo + comision de transaccion"
         );
+
+        // Transferir comisión
+        _transferTransactionFee(feeAmount);
 
         // Verificar límite de participantes
         bool isNewParticipant = !poolParticipants[_poolId][msg.sender];
@@ -192,14 +209,14 @@ contract PollPool is ReentrancyGuard, Ownable {
         poolBets[_poolId].push(
             Bet({
                 bettor: msg.sender,
-                amount: msg.value,
+                amount: pool.fixedBetAmount,
                 option: _option,
                 timestamp: block.timestamp
             })
         );
 
-        pool.totalStake += msg.value;
-        optionTotals[_poolId][_option] += msg.value;
+        pool.totalStake += pool.fixedBetAmount;
+        optionTotals[_poolId][_option] += pool.fixedBetAmount;
         userBets[msg.sender][_poolId].push(betId);
 
         // Registrar nuevo participante si es necesario
@@ -208,7 +225,76 @@ contract PollPool is ReentrancyGuard, Ownable {
             pool.currentParticipants++;
         }
 
-        emit BetPlaced(_poolId, msg.sender, _option, msg.value);
+        emit BetPlaced(_poolId, msg.sender, _option, pool.fixedBetAmount);
+    }
+
+    /**
+     * @dev Apostar múltiples veces en un pool (misma opción o diferentes)
+     * @param _poolId ID del pool
+     * @param _options Array de opciones seleccionadas (puede repetirse la misma opción)
+     * @notice El monto total debe ser igual a fixedBetAmount * cantidad de opciones
+     */
+    function placeMultipleBets(
+        uint256 _poolId,
+        uint256[] memory _options
+    ) external payable nonReentrant {
+        require(_options.length > 0, "Debe especificar al menos una opcion");
+        
+        Pool storage pool = pools[_poolId];
+        require(pool.status == PoolStatus.Open, "Pool no esta abierto");
+        require(block.timestamp < pool.closeTime, "Pool cerrado");
+        
+        uint256 totalBetAmount = pool.fixedBetAmount * _options.length;
+        
+        // Calcular comisión y monto total requerido
+        (uint256 feeAmount, uint256 totalRequired) = _calculateTransactionFee(totalBetAmount);
+        require(
+            msg.value == totalRequired,
+            "Debe pagar (fixedBetAmount * cantidad) + comision de transaccion"
+        );
+
+        // Transferir comisión (una sola vez para toda la transacción)
+        _transferTransactionFee(feeAmount);
+
+        // Verificar límite de participantes solo para el primer voto si es nuevo participante
+        bool isNewParticipant = !poolParticipants[_poolId][msg.sender];
+        if (isNewParticipant && pool.maxParticipants > 0) {
+            require(
+                pool.currentParticipants < pool.maxParticipants,
+                "Pool lleno"
+            );
+        }
+
+        // Validar todas las opciones
+        for (uint256 i = 0; i < _options.length; i++) {
+            require(_options[i] < pool.options.length, "Opcion invalida");
+        }
+
+        // Registrar todas las apuestas (cada una con el fixedBetAmount completo)
+        for (uint256 i = 0; i < _options.length; i++) {
+            uint256 betId = poolBets[_poolId].length;
+
+            poolBets[_poolId].push(
+                Bet({
+                    bettor: msg.sender,
+                    amount: pool.fixedBetAmount,
+                    option: _options[i],
+                    timestamp: block.timestamp
+                })
+            );
+
+            pool.totalStake += pool.fixedBetAmount;
+            optionTotals[_poolId][_options[i]] += pool.fixedBetAmount;
+            userBets[msg.sender][_poolId].push(betId);
+
+            emit BetPlaced(_poolId, msg.sender, _options[i], pool.fixedBetAmount);
+        }
+
+        // Registrar nuevo participante si es necesario (solo una vez)
+        if (isNewParticipant) {
+            poolParticipants[_poolId][msg.sender] = true;
+            pool.currentParticipants++;
+        }
     }
 
     /**
@@ -334,6 +420,34 @@ contract PollPool is ReentrancyGuard, Ownable {
     ) external view returns (uint256, uint256) {
         Pool memory pool = pools[_poolId];
         return (pool.currentParticipants, pool.maxParticipants);
+    }
+
+    /**
+     * @dev Función helper para calcular la comisión basada en el monto deseado
+     * @param _desiredAmount Monto que el usuario quiere apostar (sin comisión)
+     * @return feeAmount Monto de la comisión
+     * @return totalRequired Monto total que el usuario debe enviar (monto deseado + comisión)
+     */
+    function _calculateTransactionFee(uint256 _desiredAmount) internal view returns (uint256 feeAmount, uint256 totalRequired) {
+        if (transactionFee > 0 && _desiredAmount > 0) {
+            feeAmount = (_desiredAmount * transactionFee) / 10000;
+            totalRequired = _desiredAmount + feeAmount;
+        } else {
+            feeAmount = 0;
+            totalRequired = _desiredAmount;
+        }
+    }
+
+    /**
+     * @dev Función helper para transferir la comisión de transacción
+     * @param _feeAmount Monto de la comisión a transferir
+     */
+    function _transferTransactionFee(uint256 _feeAmount) internal {
+        if (_feeAmount > 0) {
+            address recipient = feeRecipient != address(0) ? feeRecipient : owner();
+            payable(recipient).transfer(_feeAmount);
+            emit TransactionFeeCollected(recipient, _feeAmount);
+        }
     }
 
     /**
@@ -602,6 +716,30 @@ contract PollPool is ReentrancyGuard, Ownable {
         uint256 oldAmount = minimumFixedBetAmount;
         minimumFixedBetAmount = _minimumFixedBetAmount;
         emit MinimumFixedBetAmountUpdated(oldAmount, _minimumFixedBetAmount);
+    }
+
+    function setTransactionFee(uint256 _transactionFee) external onlyOwner {
+        require(_transactionFee <= 1000, "Comision maxima 10%");
+        uint256 oldFee = transactionFee;
+        transactionFee = _transactionFee;
+        emit TransactionFeeUpdated(oldFee, _transactionFee);
+    }
+
+    function setFeeRecipient(address _feeRecipient) external onlyOwner {
+        require(_feeRecipient != address(0), "Direccion no puede ser cero");
+        address oldRecipient = feeRecipient;
+        feeRecipient = _feeRecipient;
+        emit FeeRecipientUpdated(oldRecipient, _feeRecipient);
+    }
+
+    /**
+     * @dev Calcular el monto total requerido para apostar un monto deseado (incluyendo comisión)
+     * @param _desiredAmount Monto que se desea apostar
+     * @return totalRequired Monto total que debe enviarse (monto deseado + comisión)
+     * @return feeAmount Monto de la comisión
+     */
+    function calculateRequiredAmount(uint256 _desiredAmount) external view returns (uint256 totalRequired, uint256 feeAmount) {
+        (feeAmount, totalRequired) = _calculateTransactionFee(_desiredAmount);
     }
 
     function emergencyPause(uint256 _poolId) external onlyOwner {
