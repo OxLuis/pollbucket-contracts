@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crear Poll - PollBucket</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .message {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .fee-info {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Crear Nuevo Poll</h1>
+        
+        <form id="pollForm">
+            <div class="form-group">
+                <label for="question">Pregunta:</label>
+                <textarea 
+                    id="question" 
+                    name="question" 
+                    required 
+                    minlength="10"
+                    placeholder="Ej: ¿Cuál será el precio de AVAX al final del mes?"
+                ></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="options">Opciones (una por línea):</label>
+                <textarea 
+                    id="options" 
+                    name="options" 
+                    required
+                    placeholder="Menos de $20&#10;$20-$30&#10;$30-$40&#10;Más de $40"
+                ></textarea>
+                <small>Mínimo 2 opciones requeridas</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="durationHours">Duración (horas):</label>
+                <input 
+                    type="number" 
+                    id="durationHours" 
+                    name="durationHours" 
+                    required 
+                    min="1" 
+                    max="720"
+                    value="168"
+                />
+                <small>Mínimo 1 hora, máximo 720 horas (30 días)</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="maxParticipants">Máximo de participantes:</label>
+                <input 
+                    type="number" 
+                    id="maxParticipants" 
+                    name="maxParticipants" 
+                    min="0"
+                    value="0"
+                />
+                <small>0 = sin límite</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="betAmount">Monto por apuesta (AVAX):</label>
+                <input 
+                    type="number" 
+                    id="betAmount" 
+                    name="betAmount" 
+                    required 
+                    min="0.05" 
+                    step="0.01"
+                    value="0.05"
+                />
+                <div class="fee-info" id="feeInfo">
+                    💰 Monto mínimo: 0.05 AVAX<br>
+                    💳 Comisión de transacción: 2%<br>
+                    📊 Total a pagar: <span id="totalAmount">0.051</span> AVAX
+                </div>
+            </div>
+            
+            <button type="submit" id="submitBtn">Crear Poll</button>
+        </form>
+        
+        <div id="message"></div>
+    </div>
+
+    <!-- Importar ethers y tu clase PollBucketWeb3 -->
+    <script type="module">
+        import { ethers } from 'https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js';
+        // Importa tu clase PollBucketWeb3 aquí
+        // import PollBucketWeb3 from './web3-integration.js';
+        
+        // Por ahora, aquí está el código inline para el ejemplo
+        class PollBucketWeb3 {
+            constructor() {
+                this.provider = null;
+                this.signer = null;
+                this.contracts = {};
+            }
+            
+            async connectWallet() {
+                if (!window.ethereum) {
+                    throw new Error('MetaMask no está instalado');
+                }
+                await window.ethereum.request({ method: 'eth_requestAccounts' });
+                this.provider = new ethers.providers.Web3Provider(window.ethereum);
+                this.signer = this.provider.getSigner();
+                return await this.signer.getAddress();
+            }
+            
+            async initializeContracts(pollPoolAddress) {
+                const pollPoolABI = [
+                    "function createPool(string memory question, string[] memory options, uint256 endTime, uint256 maxParticipants, uint256 fixedBetAmount) external payable",
+                    "function transactionFee() external view returns (uint256)",
+                    "function minimumFixedBetAmount() external view returns (uint256)",
+                    "event PoolCreated(uint256 indexed poolId, address indexed creator, string question)"
+                ];
+                this.contracts.pollPool = new ethers.Contract(pollPoolAddress, pollPoolABI, this.signer);
+            }
+            
+            async createPool(question, options, durationHours, maxParticipants, betAmountETH) {
+                const endTime = Math.floor(Date.now() / 1000) + (durationHours * 3600);
+                const betAmount = ethers.utils.parseEther(betAmountETH.toString());
+                
+                const transactionFee = await this.contracts.pollPool.transactionFee();
+                const feeAmount = betAmount.mul(transactionFee).div(10000);
+                const totalRequired = betAmount.add(feeAmount);
+                
+                const tx = await this.contracts.pollPool.createPool(
+                    question,
+                    options,
+                    endTime,
+                    maxParticipants,
+                    betAmount,
+                    { value: totalRequired }
+                );
+                
+                const receipt = await tx.wait();
+                const event = receipt.events.find(e => e.event === 'PoolCreated');
+                const poolId = event ? event.args.poolId.toString() : null;
+                
+                return { receipt, poolId, txHash: tx.hash };
+            }
+        }
+        
+        // Configuración - REEMPLAZA CON TU DIRECCIÓN DE CONTRATO
+        const POLL_POOL_ADDRESS = '0x...'; // ⚠️ Reemplaza con la dirección de tu contrato PollPool
+        
+        const pollBucket = new PollBucketWeb3();
+        
+        // Actualizar total cuando cambia el monto de apuesta
+        document.getElementById('betAmount').addEventListener('input', async (e) => {
+            const betAmount = parseFloat(e.target.value) || 0;
+            if (betAmount >= 0.05) {
+                // Calcular comisión (2%)
+                const fee = betAmount * 0.02;
+                const total = betAmount + fee;
+                document.getElementById('totalAmount').textContent = total.toFixed(3);
+            }
+        });
+        
+        // Manejar envío del formulario
+        document.getElementById('pollForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const messageDiv = document.getElementById('message');
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creando...';
+            messageDiv.innerHTML = '';
+            
+            try {
+                // Obtener datos del formulario
+                const question = document.getElementById('question').value.trim();
+                const optionsText = document.getElementById('options').value.trim();
+                const options = optionsText.split('\n').map(opt => opt.trim()).filter(opt => opt.length > 0);
+                const durationHours = parseInt(document.getElementById('durationHours').value);
+                const maxParticipants = parseInt(document.getElementById('maxParticipants').value) || 0;
+                const betAmount = document.getElementById('betAmount').value;
+                
+                // Validaciones
+                if (question.length < 10) {
+                    throw new Error('La pregunta debe tener al menos 10 caracteres');
+                }
+                if (options.length < 2) {
+                    throw new Error('Debe haber al menos 2 opciones');
+                }
+                if (parseFloat(betAmount) < 0.05) {
+                    throw new Error('El monto mínimo es 0.05 AVAX');
+                }
+                
+                // Conectar wallet
+                const address = await pollBucket.connectWallet();
+                showMessage(`🔌 Wallet conectado: ${address.slice(0, 6)}...${address.slice(-4)}`, 'info');
+                
+                // Inicializar contratos
+                await pollBucket.initializeContracts(POLL_POOL_ADDRESS);
+                
+                // Crear poll
+                const result = await pollBucket.createPool(
+                    question,
+                    options,
+                    durationHours,
+                    maxParticipants,
+                    betAmount
+                );
+                
+                // Mostrar éxito
+                showMessage(
+                    `✅ Poll creado exitosamente!<br>` +
+                    `📊 Pool ID: ${result.poolId}<br>` +
+                    `🔗 TX Hash: <a href="#" target="_blank">${result.txHash}</a>`,
+                    'success'
+                );
+                
+                // Limpiar formulario
+                document.getElementById('pollForm').reset();
+                
+            } catch (error) {
+                showMessage(`❌ Error: ${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Crear Poll';
+            }
+        });
+        
+        function showMessage(message, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = message;
+        }
+    </script>
+</body>
+</html>
+
+
+

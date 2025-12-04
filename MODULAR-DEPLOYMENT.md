@@ -163,10 +163,14 @@ function removeAuthorizedCaller(address _caller) external onlyOwner;
 deployments/
 ├── fuji-modular-deployment.json     # Direcciones actuales
 ├── avalanche-modular-deployment.json
-└── hardhat-modular-deployment.json
+├── hardhat-modular-deployment.json
+└── history/                         # Historial de deployments
+    ├── 2024-10-03_14-30-15_fuji.json
+    ├── 2024-10-03_16-45-22_fuji.json
+    └── 2024-10-04_09-15-33_avalanche.json
 ```
 
-### **Contenido del JSON:**
+### **Contenido del JSON Principal:**
 ```json
 {
   "network": "fuji",
@@ -188,6 +192,51 @@ deployments/
       "deployer": "0x1234..."
     }
   ]
+}
+```
+
+### **Archivo de Historial (deployments/history/YYYY-MM-DD_HH-mm-ss_network.json):**
+```json
+{
+  "deploymentId": "2024-10-03_14-30-15_fuji",
+  "timestamp": "2024-10-03T14:30:15.000Z",
+  "network": "fuji",
+  "chainId": 43113,
+  "deployer": "0x1234...",
+  "deploymentType": "full", // "full" | "update"
+  "gasUsed": "2450000",
+  "contracts": {
+    "pollPool": {
+      "address": "0xabc1...",
+      "txHash": "0x123...",
+      "blockNumber": 12345,
+      "gasUsed": "850000"
+    },
+    "reputationSystem": {
+      "address": "0xdef2...",
+      "txHash": "0x456...",
+      "blockNumber": 12346,
+      "gasUsed": "650000"
+    },
+    "jurySystem": {
+      "address": "0x1234...",
+      "txHash": "0x789...",
+      "blockNumber": 12347,
+      "gasUsed": "750000"
+    },
+    "platformGovernance": {
+      "address": "0x5678...",
+      "txHash": "0xabc...",
+      "blockNumber": 12348,
+      "gasUsed": "200000"
+    }
+  },
+  "changes": [
+    "Initial deployment of all contracts",
+    "Configured cross-contract references",
+    "Set up initial permissions"
+  ],
+  "notes": "First deployment to Fuji testnet"
 }
 ```
 
@@ -219,6 +268,54 @@ npm run update:contract fuji
 # 2. Actualizar contrato
 npm run update:contract fuji
 # 3. PollPool automáticamente usa el nuevo sistema
+```
+
+## 📚 **Sistema de Historial Automático**
+
+### **Registro Automático:**
+Cada deployment genera automáticamente:
+- ✅ **Archivo con timestamp** - `YYYY-MM-DD_HH-mm-ss_network.json`
+- ✅ **Direcciones de contratos** - Con hash de transacción y bloque
+- ✅ **Información de gas** - Costo total y por contrato
+- ✅ **Lista de cambios** - Descripción de modificaciones realizadas
+- ✅ **Metadata completa** - Network, deployer, timestamp
+
+### **Beneficios del Historial:**
+- 🔍 **Trazabilidad completa** - Saber exactamente qué se deployó cuándo
+- 📊 **Análisis de costos** - Tracking de gas usado en cada deployment
+- 🔄 **Rollback fácil** - Información para volver a versiones anteriores
+- 📝 **Documentación automática** - No más notas manuales
+- 🎯 **Debugging** - Identificar cuándo se introdujeron cambios
+
+### **Comandos de Historial:**
+```bash
+# Ver último deployment
+npm run deployment:latest fuji
+
+# Ver historial completo
+npm run deployment:history fuji
+
+# Comparar deployments
+npm run deployment:compare fuji 2024-10-03T14-30-15 2024-10-03T16-45-22
+
+# Limpiar deployments antiguos (mantiene últimos 5)
+npm run deployment:clean fuji
+```
+
+### **Ejemplos de Uso:**
+```bash
+# Después de un deployment, ver qué se deployó
+npm run deploy:modular:fuji
+npm run deployment:latest fuji
+
+# Ver todos los deployments históricos
+npm run deployment:history fuji
+
+# Comparar dos versiones específicas
+npm run deployment:compare fuji 2024-10-03T14-30-15 2024-10-03T16-45-22
+
+# Limpiar historial antiguo
+npm run deployment:clean fuji
 ```
 
 ## ⚠️ **Consideraciones Importantes**

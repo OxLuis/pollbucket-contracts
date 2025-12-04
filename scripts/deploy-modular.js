@@ -2,11 +2,12 @@ const { ethers } = require("hardhat");
 
 async function main() {
   console.log("🔧 Deployment Modular de PollBucket");
-  console.log("=" * 50);
+  console.log("=".repeat(50));
   
   const [deployer] = await ethers.getSigners();
   console.log("📝 Deploying con la cuenta:", deployer.address);
-  console.log("💰 Balance:", ethers.utils.formatEther(await deployer.getBalance()), "AVAX");
+  const balance = await ethers.provider.getBalance(deployer.address);
+  console.log("💰 Balance:", ethers.formatEther(balance), "AVAX");
 
   const contracts = {};
   
@@ -14,53 +15,53 @@ async function main() {
   console.log("\n📦 1. Deploying ReputationSystem...");
   const ReputationSystem = await ethers.getContractFactory("ReputationSystem");
   const reputationSystem = await ReputationSystem.deploy();
-  await reputationSystem.deployed();
-  contracts.reputationSystem = reputationSystem.address;
-  console.log("✅ ReputationSystem:", reputationSystem.address);
+  await reputationSystem.waitForDeployment();
+  contracts.reputationSystem = await reputationSystem.getAddress();
+  console.log("✅ ReputationSystem:", contracts.reputationSystem);
 
   // PASO 2: Deploy JurySystem (necesita ReputationSystem, PollPool se configura después)
   console.log("\n📦 2. Deploying JurySystem...");
   const JurySystem = await ethers.getContractFactory("JurySystem");
   const jurySystem = await JurySystem.deploy(
-    reputationSystem.address,  // ReputationSystem
-    ethers.constants.AddressZero  // PollPool (se configura después)
+    contracts.reputationSystem,  // ReputationSystem
+    ethers.ZeroAddress  // PollPool (se configura después)
   );
-  await jurySystem.deployed();
-  contracts.jurySystem = jurySystem.address;
-  console.log("✅ JurySystem:", jurySystem.address);
+  await jurySystem.waitForDeployment();
+  contracts.jurySystem = await jurySystem.getAddress();
+  console.log("✅ JurySystem:", contracts.jurySystem);
 
   // PASO 3: Deploy PollPool (necesita ReputationSystem y JurySystem)
   console.log("\n📦 3. Deploying PollPool...");
   const PollPool = await ethers.getContractFactory("PollPool");
   const pollPool = await PollPool.deploy(
-    reputationSystem.address,  // ReputationSystem
-    jurySystem.address        // JurySystem
+    contracts.reputationSystem,  // ReputationSystem
+    contracts.jurySystem        // JurySystem
   );
-  await pollPool.deployed();
-  contracts.pollPool = pollPool.address;
-  console.log("✅ PollPool:", pollPool.address);
+  await pollPool.waitForDeployment();
+  contracts.pollPool = await pollPool.getAddress();
+  console.log("✅ PollPool:", contracts.pollPool);
 
   // PASO 4: Deploy PlatformGovernance (necesita todos los anteriores)
   console.log("\n📦 4. Deploying PlatformGovernance...");
   const PlatformGovernance = await ethers.getContractFactory("PlatformGovernance");
   const governance = await PlatformGovernance.deploy(
-    pollPool.address,         // PollPool
-    reputationSystem.address, // ReputationSystem
-    jurySystem.address       // JurySystem
+    contracts.pollPool,         // PollPool
+    contracts.reputationSystem, // ReputationSystem
+    contracts.jurySystem       // JurySystem
   );
-  await governance.deployed();
-  contracts.platformGovernance = governance.address;
-  console.log("✅ PlatformGovernance:", governance.address);
+  await governance.waitForDeployment();
+  contracts.platformGovernance = await governance.getAddress();
+  console.log("✅ PlatformGovernance:", contracts.platformGovernance);
 
   // PASO 5: Configurar referencias cruzadas
   console.log("\n🔗 5. Configurando referencias entre contratos...");
   
   // JurySystem necesita conocer PollPool
-  await jurySystem.updatePollPool(pollPool.address);
+  await jurySystem.updatePollPool(contracts.pollPool);
   console.log("   ✅ JurySystem → PollPool configurado");
   
   // ReputationSystem autoriza a JurySystem
-  await reputationSystem.addAuthorizedCaller(jurySystem.address);
+  await reputationSystem.addAuthorizedCaller(contracts.jurySystem);
   console.log("   ✅ ReputationSystem autoriza JurySystem");
 
   // PASO 6: Transferir ownership a PlatformGovernance (opcional)
@@ -78,37 +79,96 @@ async function main() {
   console.log("\n💾 7. Guardando información del deployment...");
   
   const fs = require('fs');
+  const path = require('path');
+  
+  // Crear directorios si no existen
   if (!fs.existsSync('deployments')) {
     fs.mkdirSync('deployments');
   }
+  if (!fs.existsSync('deployments/history')) {
+    fs.mkdirSync('deployments/history');
+  }
   
+  const network = await ethers.provider.getNetwork();
+  const timestamp = new Date();
+  const deploymentId = timestamp.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  
+  // Obtener información de transacciones
+  const reputationTx = reputationSystem.deploymentTransaction();
+  const juryTx = jurySystem.deploymentTransaction();
+  const pollTx = pollPool.deploymentTransaction();
+  const governanceTx = governance.deploymentTransaction();
+  
+  // Información básica del deployment
   const deploymentInfo = {
     network: hre.network.name,
-    chainId: (await ethers.provider.getNetwork()).chainId,
+    chainId: Number(network.chainId),
     deployer: deployer.address,
-    deploymentTime: new Date().toISOString(),
-    blockNumber: await ethers.provider.getBlockNumber(),
+    deploymentTime: timestamp.toISOString(),
+    blockNumber: Number(await ethers.provider.getBlockNumber()),
     contracts: contracts,
-    gasUsed: {
-      reputationSystem: reputationSystem.deployTransaction.gasLimit?.toString() || "N/A",
-      jurySystem: jurySystem.deployTransaction.gasLimit?.toString() || "N/A",
-      pollPool: pollPool.deployTransaction.gasLimit?.toString() || "N/A",
-      platformGovernance: governance.deployTransaction.gasLimit?.toString() || "N/A"
-    },
     transactionHashes: {
-      reputationSystem: reputationSystem.deployTransaction.hash,
-      jurySystem: jurySystem.deployTransaction.hash,
-      pollPool: pollPool.deployTransaction.hash,
-      platformGovernance: governance.deployTransaction.hash
+      reputationSystem: reputationTx?.hash || "N/A",
+      jurySystem: juryTx?.hash || "N/A",
+      pollPool: pollTx?.hash || "N/A",
+      platformGovernance: governanceTx?.hash || "N/A"
     }
   };
   
+  // Información detallada para el historial
+  const historyInfo = {
+    deploymentId: `${deploymentId}_${hre.network.name}`,
+    timestamp: timestamp.toISOString(),
+    network: hre.network.name,
+    chainId: Number(network.chainId),
+    deployer: deployer.address,
+    deploymentType: "full",
+    contracts: {
+      pollPool: {
+        address: contracts.pollPool,
+        txHash: pollTx?.hash || "N/A",
+        blockNumber: "N/A" // Se obtendría del receipt
+      },
+      reputationSystem: {
+        address: contracts.reputationSystem,
+        txHash: reputationTx?.hash || "N/A",
+        blockNumber: "N/A"
+      },
+      jurySystem: {
+        address: contracts.jurySystem,
+        txHash: juryTx?.hash || "N/A",
+        blockNumber: "N/A"
+      },
+      platformGovernance: {
+        address: contracts.platformGovernance,
+        txHash: governanceTx?.hash || "N/A",
+        blockNumber: "N/A"
+      }
+    },
+    changes: [
+      "Initial deployment of all contracts",
+      "Configured cross-contract references",
+      "Set up ReputationSystem authorization for JurySystem",
+      "Maintained deployer ownership for flexibility"
+    ],
+    notes: `Full modular deployment to ${hre.network.name} network`
+  };
+  
+  // Guardar archivo principal
   fs.writeFileSync(
     `deployments/${hre.network.name}-modular-deployment.json`, 
     JSON.stringify(deploymentInfo, null, 2)
   );
   
+  // Guardar archivo de historial con timestamp
+  const historyFileName = `${deploymentId}_${hre.network.name}.json`;
+  fs.writeFileSync(
+    `deployments/history/${historyFileName}`, 
+    JSON.stringify(historyInfo, null, 2)
+  );
+  
   console.log(`   ✅ Guardado en deployments/${hre.network.name}-modular-deployment.json`);
+  console.log(`   ✅ Historial guardado en deployments/history/${historyFileName}`);
 
   // PASO 8: Mostrar resumen
   console.log("\n🎉 ¡Deployment modular completado!");

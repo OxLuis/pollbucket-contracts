@@ -1,0 +1,37 @@
+{
+  "deploymentId": "2025-12-04T15-13-41_fuji",
+  "timestamp": "2025-12-04T15:13:41.019Z",
+  "network": "fuji",
+  "chainId": 43113,
+  "deployer": "0x8f249f614BE3dB5E6092C09676dc53ad0c92b56A",
+  "deploymentType": "full",
+  "contracts": {
+    "pollPool": {
+      "address": "0xF8D31059649ad89c5Bab14bbBC8A8d9518B26cCC",
+      "txHash": "0xf8bdb0a3b21e8ee6281bb1758cdd64b7bb327253eb418c459c5059ec5c4540c6",
+      "blockNumber": "N/A"
+    },
+    "reputationSystem": {
+      "address": "0xeD68533D78016407aB4c5688a6a4F84fc6F55C2f",
+      "txHash": "0x231b86f657a6b49b4e7a6fdc9d77022b3803e399dc6ba81ea3f272798f5c5df2",
+      "blockNumber": "N/A"
+    },
+    "jurySystem": {
+      "address": "0x0061d44B696a21552463BAFB2A43E32c56cF754D",
+      "txHash": "0xe3070d05f06a10b219ffa41e9a66e7b9370f79d6c18f9d636ab1fd03d6d49a4b",
+      "blockNumber": "N/A"
+    },
+    "platformGovernance": {
+      "address": "0x33d10f15B07D01Fc16dA7aeb796e33cC5b5cADcf",
+      "txHash": "0x78bfae8006844c3ce415bd2c09e64cdd1cc50cf13583aaac0f50dc55ed3bb385",
+      "blockNumber": "N/A"
+    }
+  },
+  "changes": [
+    "Initial deployment of all contracts",
+    "Configured cross-contract references",
+    "Set up ReputationSystem authorization for JurySystem",
+    "Maintained deployer ownership for flexibility"
+  ],
+  "notes": "Full modular deployment to fuji network"
+}

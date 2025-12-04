@@ -18,6 +18,19 @@ contract PollPool is ReentrancyGuard, Ownable {
         Cancelled
     }
 
+    // Categorías de pools
+    enum Category {
+        General,        // 0 - General/Sin categoría
+        Sports,         // 1 - Deportes
+        Crypto,         // 2 - Criptomonedas
+        Politics,       // 3 - Política
+        Entertainment,  // 4 - Entretenimiento
+        Technology,     // 5 - Tecnología
+        Gaming,         // 6 - Juegos/eSports
+        Finance,        // 7 - Finanzas
+        Other           // 8 - Otros
+    }
+
     struct Pool {
         uint256 id;
         address creator;
@@ -33,6 +46,10 @@ contract PollPool is ReentrancyGuard, Ownable {
         uint256 maxParticipants; // Máximo número de participantes
         uint256 currentParticipants; // Número actual de participantes
         uint256 fixedBetAmount; // Monto fijo que todos deben pagar para votar
+        // Nuevos campos para categoría y premium
+        Category category; // Categoría del pool
+        bool isPremium; // Si es un pool premium
+        string imageURI; // URI de la imagen (URL, IPFS hash, etc.) - solo para premium
     }
 
     struct Bet {
@@ -40,6 +57,18 @@ contract PollPool is ReentrancyGuard, Ownable {
         uint256 amount;
         uint256 option;
         uint256 timestamp;
+    }
+
+    // Struct para parámetros de creación de pool (evita "stack too deep")
+    struct CreatePoolParams {
+        string question;
+        string[] options;
+        uint256 closeTime;
+        uint256 maxParticipants;
+        uint256 fixedBetAmount;
+        Category category;
+        bool isPremium;
+        string imageURI;
     }
 
     // State variables
@@ -62,6 +91,12 @@ contract PollPool is ReentrancyGuard, Ownable {
     uint256[] public allPoolIds; // Array de todos los IDs de pools
     mapping(PoolStatus => uint256[]) public poolsByStatus; // Pools por estado
     mapping(address => uint256[]) public poolsByCreator; // Pools por creador
+    mapping(Category => uint256[]) public poolsByCategory; // Pools por categoría
+    uint256[] public premiumPools; // Array de pools premium
+
+    // Configuración premium
+    uint256 public premiumFee = 0.01 ether; // Fee adicional para crear pools premium (configurable)
+    bool public premiumEnabled = true; // Habilitar/deshabilitar funcionalidad premium
 
     IReputationSystem public reputationSystem;
     IJurySystem public jurySystem;
@@ -70,7 +105,9 @@ contract PollPool is ReentrancyGuard, Ownable {
     event PoolCreated(
         uint256 indexed poolId,
         address indexed creator,
-        string question
+        string question,
+        Category category,
+        bool isPremium
     );
     event BetPlaced(
         uint256 indexed poolId,
@@ -85,6 +122,14 @@ contract PollPool is ReentrancyGuard, Ownable {
     event TransactionFeeUpdated(uint256 oldFee, uint256 newFee);
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event TransactionFeeCollected(address indexed recipient, uint256 amount);
+    event PremiumFeeUpdated(uint256 oldFee, uint256 newFee);
+    event PoolImageUpdated(uint256 indexed poolId, string newImageURI);
+    event PoolCancelled(
+        uint256 indexed poolId, 
+        address indexed cancelledBy, 
+        string reason,
+        bool byOwner // true si fue cancelado por el owner (violación de políticas, etc.)
+    );
 
     constructor(address _reputationSystem, address _jurySystem) {
         reputationSystem = IReputationSystem(_reputationSystem);
@@ -93,83 +138,108 @@ contract PollPool is ReentrancyGuard, Ownable {
     }
     /**
      * @dev Crear un nuevo pool de preguntas
-     * @param _question Texto de la pregunta
-     * @param _options Array de opciones de respuesta
-     * @param _closeTime Timestamp de cierre del pool
-     * @param _maxParticipants Máximo número de participantes (0 = sin límite)
-     * @param _fixedBetAmount Monto fijo que todos deben pagar para votar (msg.value debe ser igual a este monto)
+     * @param params Struct con todos los parámetros del pool
      */
-    function createPool(
-        string memory _question,
-        string[] memory _options,
-        uint256 _closeTime,
-        uint256 _maxParticipants,
-        uint256 _fixedBetAmount
-    ) external payable nonReentrant {
-        require(
-            _fixedBetAmount >= minimumFixedBetAmount,
-            "Monto fijo debe ser >= monto minimo establecido"
-        );
-        require(_options.length >= 2, "Minimo 2 opciones requeridas");
-        require(
-            _closeTime > block.timestamp,
-            "Tiempo de cierre debe ser futuro"
-        );
-        require(
-            _maxParticipants == 0 || _maxParticipants >= 2,
-            "Minimo 2 participantes si hay limite"
-        );
+    function createPool(CreatePoolParams memory params) external payable nonReentrant {
+        _validateCreatePoolParams(params);
+        
+        // Calcular y validar pagos
+        (uint256 feeAmount, uint256 totalRequired) = _calculateTransactionFee(params.fixedBetAmount);
+        if (params.isPremium) {
+            totalRequired += premiumFee;
+        }
+        
+        require(msg.value == totalRequired, "Monto incorrecto enviado");
 
-        // Calcular comisión y monto total requerido
-        (uint256 feeAmount, uint256 totalRequired) = _calculateTransactionFee(_fixedBetAmount);
-        require(
-            msg.value == totalRequired,
-            "Debe pagar el monto fijo + comision de transaccion"
-        );
-
-        // Transferir comisión
+        // Transferir comisiones
         _transferTransactionFee(feeAmount);
+        if (params.isPremium && premiumFee > 0) {
+            (bool success, ) = payable(feeRecipient).call{value: premiumFee}("");
+            require(success, "Error transfiriendo fee premium");
+        }
 
+        // Crear pool
         uint256 poolId = nextPoolId++;
+        _createPoolStorage(poolId, params);
+        _registerPoolTracking(poolId, params);
+        _createInitialBet(poolId, params.fixedBetAmount);
 
+        emit PoolCreated(poolId, msg.sender, params.question, params.category, params.isPremium);
+    }
+
+    /**
+     * @dev Validar parámetros de creación de pool
+     */
+    function _validateCreatePoolParams(CreatePoolParams memory params) internal view {
+        require(params.fixedBetAmount >= minimumFixedBetAmount, "Monto fijo debe ser >= monto minimo");
+        require(params.options.length >= 2, "Minimo 2 opciones requeridas");
+        require(params.closeTime > block.timestamp, "Tiempo de cierre debe ser futuro");
+        require(params.maxParticipants == 0 || params.maxParticipants >= 2, "Minimo 2 participantes si hay limite");
+        
+        if (bytes(params.imageURI).length > 0) {
+            require(params.isPremium, "Solo pools premium pueden tener imagen");
+        }
+        if (params.isPremium) {
+            require(premiumEnabled, "Funcionalidad premium deshabilitada");
+        }
+    }
+
+    /**
+     * @dev Crear almacenamiento del pool
+     */
+    function _createPoolStorage(uint256 poolId, CreatePoolParams memory params) internal {
         pools[poolId] = Pool({
             id: poolId,
             creator: msg.sender,
-            question: _question,
-            options: _options,
+            question: params.question,
+            options: params.options,
             openTime: block.timestamp,
-            closeTime: _closeTime,
-            totalStake: _fixedBetAmount,
+            closeTime: params.closeTime,
+            totalStake: params.fixedBetAmount,
             creatorCommission: creatorCommission,
             status: PoolStatus.Open,
             winningOption: 0,
             rewardsDistributed: false,
-            maxParticipants: _maxParticipants,
+            maxParticipants: params.maxParticipants,
             currentParticipants: 1,
-            fixedBetAmount: _fixedBetAmount
+            fixedBetAmount: params.fixedBetAmount,
+            category: params.category,
+            isPremium: params.isPremium,
+            imageURI: params.imageURI
         });
+    }
 
-        // Registrar pool para búsqueda e identificación
+    /**
+     * @dev Registrar pool en arrays de tracking
+     */
+    function _registerPoolTracking(uint256 poolId, CreatePoolParams memory params) internal {
         allPoolIds.push(poolId);
         poolsByStatus[PoolStatus.Open].push(poolId);
         poolsByCreator[msg.sender].push(poolId);
+        poolsByCategory[params.category].push(poolId);
+        
+        if (params.isPremium) {
+            premiumPools.push(poolId);
+        }
+    }
 
-        // Registrar la apuesta inicial del creador (opción 0 por defecto)
+    /**
+     * @dev Crear apuesta inicial del creador
+     */
+    function _createInitialBet(uint256 poolId, uint256 betAmount) internal {
         poolBets[poolId].push(
             Bet({
                 bettor: msg.sender,
-                amount: _fixedBetAmount,
+                amount: betAmount,
                 option: 0,
                 timestamp: block.timestamp
             })
         );
 
-        optionTotals[poolId][0] += _fixedBetAmount;
+        optionTotals[poolId][0] += betAmount;
         userPools[msg.sender].push(poolId);
         userBets[msg.sender][poolId].push(0);
         poolParticipants[poolId][msg.sender] = true;
-
-        emit PoolCreated(poolId, msg.sender, _question);
     }
 
     /**
@@ -742,8 +812,43 @@ contract PollPool is ReentrancyGuard, Ownable {
         (feeAmount, totalRequired) = _calculateTransactionFee(_desiredAmount);
     }
 
+    /**
+     * @dev Cancelar un pool (solo creador o owner del contrato)
+     * @param _poolId ID del pool a cancelar
+     * @param _reason Razón de la cancelación
+     * 
+     * El creador puede cancelar su propio pool.
+     * El owner puede cancelar cualquier pool (ej: violación de políticas).
+     */
+    function cancelPool(uint256 _poolId, string memory _reason) external {
+        Pool storage pool = pools[_poolId];
+        
+        // Solo el creador o el owner pueden cancelar
+        bool isCreator = msg.sender == pool.creator;
+        bool isOwner = msg.sender == owner();
+        require(isCreator || isOwner, "Solo creador u owner pueden cancelar");
+        
+        // No se puede cancelar un pool ya cancelado o validado/resuelto
+        require(pool.status != PoolStatus.Cancelled, "Pool ya cancelado");
+        require(pool.status != PoolStatus.Validated, "Pool ya validado, no se puede cancelar");
+        
+        PoolStatus oldStatus = pool.status;
+        pool.status = PoolStatus.Cancelled;
+
+        // Actualizar tracking
+        _updatePoolStatusTracking(_poolId, oldStatus, PoolStatus.Cancelled);
+        
+        emit PoolCancelled(_poolId, msg.sender, _reason, isOwner && !isCreator);
+    }
+
+    /**
+     * @dev Cancelación de emergencia por el owner (sin razón requerida)
+     * @param _poolId ID del pool a cancelar
+     */
     function emergencyPause(uint256 _poolId) external onlyOwner {
         Pool storage pool = pools[_poolId];
+        require(pool.status != PoolStatus.Cancelled, "Pool ya cancelado");
+        
         PoolStatus oldStatus = pool.status;
         pool.status = PoolStatus.Cancelled;
 
@@ -751,6 +856,8 @@ contract PollPool is ReentrancyGuard, Ownable {
         if (oldStatus != PoolStatus.Cancelled) {
             _updatePoolStatusTracking(_poolId, oldStatus, PoolStatus.Cancelled);
         }
+        
+        emit PoolCancelled(_poolId, msg.sender, "Emergency pause by owner", true);
     }
     
     // Funciones de actualización de contratos
@@ -760,5 +867,125 @@ contract PollPool is ReentrancyGuard, Ownable {
     
     function updateJurySystem(address _newJurySystem) external onlyOwner {
         jurySystem = IJurySystem(_newJurySystem);
+    }
+
+    // ==================== FUNCIONES DE CATEGORÍA Y PREMIUM ====================
+
+    /**
+     * @dev Obtener pools por categoría
+     * @param _category Categoría a buscar
+     */
+    function getPoolsByCategory(Category _category) external view returns (uint256[] memory) {
+        return poolsByCategory[_category];
+    }
+
+    /**
+     * @dev Obtener todos los pools premium
+     */
+    function getPremiumPools() external view returns (uint256[] memory) {
+        return premiumPools;
+    }
+
+    /**
+     * @dev Obtener información de categoría y premium de un pool
+     * @param _poolId ID del pool
+     */
+    function getPoolCategoryInfo(uint256 _poolId) external view returns (
+        Category category,
+        bool isPremium,
+        string memory imageURI
+    ) {
+        Pool storage pool = pools[_poolId];
+        return (pool.category, pool.isPremium, pool.imageURI);
+    }
+
+    /**
+     * @dev Obtener número de pools por categoría
+     * @param _category Categoría a contar
+     */
+    function getPoolCountByCategory(Category _category) external view returns (uint256) {
+        return poolsByCategory[_category].length;
+    }
+
+    /**
+     * @dev Obtener número total de pools premium
+     */
+    function getPremiumPoolsCount() external view returns (uint256) {
+        return premiumPools.length;
+    }
+
+    /**
+     * @dev Actualizar imagen de un pool premium (solo creador del pool)
+     * @param _poolId ID del pool
+     * @param _newImageURI Nueva URI de la imagen
+     */
+    function updatePoolImage(uint256 _poolId, string memory _newImageURI) external {
+        Pool storage pool = pools[_poolId];
+        require(msg.sender == pool.creator, "Solo el creador puede actualizar");
+        require(pool.isPremium, "Solo pools premium pueden tener imagen");
+        require(pool.status == PoolStatus.Open, "Pool debe estar abierto");
+        
+        pool.imageURI = _newImageURI;
+        emit PoolImageUpdated(_poolId, _newImageURI);
+    }
+
+    /**
+     * @dev Calcular el monto total requerido para crear un pool (incluyendo premium fee si aplica)
+     * @param _fixedBetAmount Monto fijo de apuesta
+     * @param _isPremium Si el pool será premium
+     */
+    function calculateCreatePoolAmount(
+        uint256 _fixedBetAmount, 
+        bool _isPremium
+    ) external view returns (
+        uint256 totalRequired,
+        uint256 transactionFeeAmount,
+        uint256 premiumFeeAmount
+    ) {
+        (transactionFeeAmount, totalRequired) = _calculateTransactionFee(_fixedBetAmount);
+        premiumFeeAmount = 0;
+        
+        if (_isPremium) {
+            premiumFeeAmount = premiumFee;
+            totalRequired += premiumFee;
+        }
+    }
+
+    // ==================== FUNCIONES ADMIN PARA PREMIUM ====================
+
+    /**
+     * @dev Establecer fee para pools premium (solo owner)
+     * @param _premiumFee Nuevo fee en wei
+     */
+    function setPremiumFee(uint256 _premiumFee) external onlyOwner {
+        uint256 oldFee = premiumFee;
+        premiumFee = _premiumFee;
+        emit PremiumFeeUpdated(oldFee, _premiumFee);
+    }
+
+    /**
+     * @dev Habilitar/deshabilitar funcionalidad premium (solo owner)
+     * @param _enabled Estado de la funcionalidad
+     */
+    function setPremiumEnabled(bool _enabled) external onlyOwner {
+        premiumEnabled = _enabled;
+    }
+
+    /**
+     * @dev Obtener todas las categorías disponibles como array de strings
+     * Útil para el frontend
+     */
+    function getCategoryNames() external pure returns (string[9] memory) {
+        return [
+            "General",
+            "Sports",
+            "Crypto",
+            "Politics",
+            "Entertainment",
+            "Technology",
+            "Gaming",
+            "Finance",
+            "Other"
+        ];
     }
 }

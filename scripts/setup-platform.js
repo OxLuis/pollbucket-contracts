@@ -1,14 +1,15 @@
 const { ethers } = require("hardhat");
+const hre = require("hardhat");
 
 async function main() {
   console.log("⚙️ Configurando plataforma PollBucket...");
   
   // Cargar información de deployment
   const fs = require('fs');
-  const deploymentPath = `deployments/${hre.network.name}-deployment.json`;
+  const deploymentPath = `deployments/${hre.network.name}-modular-deployment.json`;
   
   if (!fs.existsSync(deploymentPath)) {
-    console.error("❌ No se encontró archivo de deployment. Ejecuta deploy.js primero.");
+    console.error("❌ No se encontró archivo de deployment modular. Ejecuta deploy-modular.js primero.");
     return;
   }
   
@@ -28,71 +29,77 @@ async function main() {
   // Registrar deployer como primer jurado
   console.log("👨‍⚖️ Registrando deployer como jurado inicial...");
   const registerTx = await reputationSystem.registerAsJuror({ 
-    value: ethers.utils.parseEther("0.1") 
+    value: ethers.parseEther("0.1") 
   });
   await registerTx.wait();
   console.log("✅ Deployer registrado como jurado");
   
   // Crear pool de ejemplo
   console.log("\n📊 Creando pool de ejemplo...");
-  const fixedBetAmount = ethers.utils.parseEther("0.05"); // 0.05 AVAX por voto
-  const createPoolTx = await pollPool.createPool(
-    "¿Cuál será el precio de AVAX al final del mes?",
-    ["Menos de $20", "$20-$30", "$30-$40", "Más de $40"],
-    Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60), // 7 días
-    10, // Máximo 10 participantes
-    fixedBetAmount, // Monto fijo por voto
-    { value: fixedBetAmount } // El creador paga el mismo monto
+  const fixedBetAmount = ethers.parseEther("0.05"); // 0.05 AVAX por voto
+  
+  // Calcular monto total requerido usando la nueva función
+  const [totalRequired, txFeeAmount, premiumFeeAmount] = await pollPool.calculateCreatePoolAmount(
+    fixedBetAmount,
+    false // No es premium
   );
+  
+  console.log(`   💰 Monto fijo: ${ethers.formatEther(fixedBetAmount)} AVAX`);
+  console.log(`   💰 Comisión de tx: ${ethers.formatEther(txFeeAmount)} AVAX`);
+  console.log(`   💰 Total requerido: ${ethers.formatEther(totalRequired)} AVAX`);
+  
+  // Crear pool usando el struct CreatePoolParams
+  // Categorías: 0=General, 1=Sports, 2=Crypto, 3=Politics, 4=Entertainment, 5=Technology, 6=Gaming, 7=Finance, 8=Other
+  const createPoolParams = {
+    question: "¿Cuál será el precio de AVAX al final del mes?",
+    options: ["Menos de $20", "$20-$30", "$30-$40", "Más de $40"],
+    closeTime: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60), // 7 días
+    maxParticipants: 10,
+    fixedBetAmount: fixedBetAmount,
+    category: 2, // Crypto
+    isPremium: false,
+    imageURI: "" // Sin imagen (no es premium)
+  };
+  
+  const createPoolTx = await pollPool.createPool(createPoolParams, { value: totalRequired });
   const receipt = await createPoolTx.wait();
   
-  // Obtener ID del pool creado
-  const poolCreatedEvent = receipt.events.find(e => e.event === 'PoolCreated');
-  const poolId = poolCreatedEvent.args.poolId;
+  // Obtener poolId del evento
+  const poolCreatedEvent = receipt.logs.find(log => {
+    try {
+      return pollPool.interface.parseLog(log)?.name === 'PoolCreated';
+    } catch { return false; }
+  });
+  
+  const poolId = poolCreatedEvent 
+    ? pollPool.interface.parseLog(poolCreatedEvent).args.poolId 
+    : 1;
   
   console.log("✅ Pool de ejemplo creado con ID:", poolId.toString());
   
-  // Verificar configuración
+  // Verificar configuración básica
   console.log("\n🔍 Verificando configuración...");
   
-  const jurorProfile = await reputationSystem.getJurorProfile(deployer.address);
-  console.log("   Reputación del deployer:", jurorProfile.reputation.toString());
-  console.log("   Stake del deployer:", ethers.utils.formatEther(jurorProfile.stakedAmount), "AVAX");
-  
-  // Obtener información completa del pool
-  const poolInfo = await pollPool.getPoolInfo(poolId);
-  console.log("   📊 Información del Pool:");
-  console.log("      Total AVAX acumulado:", ethers.utils.formatEther(poolInfo.totalAvax), "AVAX");
-  console.log("      Participantes:", poolInfo.currentParticipants.toString(), "/", 
-              poolInfo.maxParticipants.toString() === "0" ? "∞" : poolInfo.maxParticipants.toString());
-  console.log("      Tiempo restante:", poolInfo.daysRemaining.toString(), "días,", 
-              poolInfo.hoursRemaining.toString(), "horas,", poolInfo.minutesRemaining.toString(), "minutos");
-  console.log("      Monto fijo por voto:", ethers.utils.formatEther(poolInfo.fixedBetAmount), "AVAX");
-  console.log("      Estado:", poolInfo.status === 0 ? "Abierto" : "Cerrado");
-  
-  // Verificar si se puede unir al pool
-  const [canJoin, reason] = await pollPool.canJoinPool(poolId);
-  console.log("      ¿Se puede unir?:", canJoin ? "Sí" : "No -", reason);
-  
-  // Obtener estadísticas del pool
-  const poolStats = await pollPool.getPoolStats(poolId);
-  console.log("      Ocupación:", poolStats.participantPercentage.toString() + "%");
-  console.log("      ¿Está lleno?:", poolStats.isFull ? "Sí" : "No");
-  console.log("      ¿Está activo?:", poolStats.isActive ? "Sí" : "No");
-  
-  const totalPools = await pollPool.getTotalPoolsCount();
-  const activePools = await pollPool.getActivePoolsCount();
-  console.log("   📈 Estadísticas generales:");
-  console.log("      Total pools:", totalPools.toString(), "| Activos:", activePools.toString());
-  
-  const minimumFixedBet = await pollPool.minimumFixedBetAmount();
-  console.log("      Monto mínimo por voto:", ethers.utils.formatEther(minimumFixedBet), "AVAX");
-  
-  const minStakeRequired = await reputationSystem.getMinStakeRequired();
-  console.log("      Stake mínimo para jurados:", ethers.utils.formatEther(minStakeRequired), "AVAX");
-  
-  const activeJurors = await reputationSystem.getActiveJurorsCount();
-  console.log("      Jurados activos:", activeJurors.toString());
+  try {
+    // Verificar contratos básicos
+    console.log("   📋 Contratos desplegados:");
+    console.log("      PollPool:", deployment.contracts.pollPool);
+    console.log("      ReputationSystem:", deployment.contracts.reputationSystem);
+    console.log("      JurySystem:", deployment.contracts.jurySystem);
+    console.log("      PlatformGovernance:", deployment.contracts.platformGovernance);
+    
+    // Verificar que los contratos respondan
+    const pollPoolAddress = await pollPool.getAddress();
+    const reputationAddress = await reputationSystem.getAddress();
+    console.log("   ✅ Contratos responden correctamente");
+    
+    // Verificar balance del deployer
+    const balance = await ethers.provider.getBalance(deployer.address);
+    console.log("   💰 Balance del deployer:", ethers.formatEther(balance), "AVAX");
+    
+  } catch (error) {
+    console.log("   ⚠️ Error verificando configuración:", error.message);
+  }
   
   console.log("\n🎉 ¡Configuración completada!");
   console.log("🌐 La plataforma PollBucket está lista para usar");

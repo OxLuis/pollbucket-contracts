@@ -10,6 +10,7 @@ module.exports = {
         enabled: true,
         runs: 200,
       },
+      viaIR: true, // Habilitar para evitar "stack too deep" con structs grandes
     },
   },
   networks: {
