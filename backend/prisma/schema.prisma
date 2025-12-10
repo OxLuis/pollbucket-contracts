@@ -1,0 +1,188 @@
+// Schema de base de datos para PollBucket
+// Usando Prisma ORM con PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== MODELOS PRINCIPALES ====================
+
+// Pools/Encuestas
+model Pool {
+  id                  Int       @id @default(autoincrement())
+  poolId              Int       @unique // ID del contrato
+  creator             String    // Dirección del creador
+  question            String
+  options             String[]  // Array de opciones
+  openTime            DateTime
+  closeTime           DateTime
+  totalStake          String    // En wei (BigInt como string)
+  fixedBetAmount      String    // En wei
+  maxParticipants     Int
+  currentParticipants Int       @default(1)
+  status              PoolStatus @default(OPEN)
+  winningOption       Int?
+  rewardsDistributed  Boolean   @default(false)
+  
+  // Nuevos campos
+  category            Category  @default(GENERAL)
+  isPremium           Boolean   @default(false)
+  imageURI            String?   // URL de la imagen
+  
+  // Metadata
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  txHash              String?   // Hash de la transacción de creación
+  blockNumber         Int?
+  
+  // Relaciones
+  bets                Bet[]
+  transactions        Transaction[]
+  
+  @@index([creator])
+  @@index([status])
+  @@index([category])
+  @@index([isPremium])
+  @@index([closeTime])
+}
+
+// Apuestas/Votos
+model Bet {
+  id          Int      @id @default(autoincrement())
+  poolId      Int
+  pool        Pool     @relation(fields: [poolId], references: [poolId])
+  bettor      String   // Dirección del apostador
+  amount      String   // En wei
+  option      Int      // Índice de la opción
+  timestamp   DateTime
+  
+  // Metadata
+  txHash      String?
+  blockNumber Int?
+  createdAt   DateTime @default(now())
+  
+  @@index([poolId])
+  @@index([bettor])
+}
+
+// Transacciones (log de todas las transacciones)
+model Transaction {
+  id              Int             @id @default(autoincrement())
+  txHash          String          @unique
+  blockNumber     Int
+  blockTimestamp  DateTime
+  from            String          // Dirección origen
+  to              String?         // Dirección destino
+  value           String          // En wei
+  type            TransactionType
+  status          TxStatus        @default(CONFIRMED)
+  
+  // Referencias opcionales
+  poolId          Int?
+  pool            Pool?           @relation(fields: [poolId], references: [poolId])
+  
+  // Metadata del evento
+  eventName       String?
+  eventData       Json?           // Datos del evento parseados
+  
+  createdAt       DateTime        @default(now())
+  
+  @@index([from])
+  @@index([type])
+  @@index([poolId])
+  @@index([blockTimestamp])
+}
+
+// Usuarios (cache de información de usuarios)
+model User {
+  id              Int       @id @default(autoincrement())
+  address         String    @unique
+  
+  // Estadísticas
+  poolsCreated    Int       @default(0)
+  totalBets       Int       @default(0)
+  totalWins       Int       @default(0)
+  totalStaked     String    @default("0") // En wei
+  totalWon        String    @default("0") // En wei
+  
+  // Jurado
+  isJuror         Boolean   @default(false)
+  jurorReputation Int       @default(0)
+  jurorStake      String    @default("0")
+  
+  // Metadata
+  firstSeen       DateTime  @default(now())
+  lastActive      DateTime  @default(now())
+  
+  @@index([isJuror])
+}
+
+// Estado de sincronización
+model SyncState {
+  id              Int       @id @default(1)
+  lastBlockNumber Int       @default(0)
+  lastSyncTime    DateTime  @default(now())
+  isRunning       Boolean   @default(false)
+}
+
+// Imágenes subidas
+model UploadedImage {
+  id          Int       @id @default(autoincrement())
+  filename    String    @unique
+  originalName String
+  mimetype    String
+  size        Int
+  path        String
+  url         String
+  poolId      Int?      // Asociado a un pool (opcional)
+  uploadedBy  String?   // Dirección del uploader
+  createdAt   DateTime  @default(now())
+  
+  @@index([poolId])
+  @@index([uploadedBy])
+}
+
+// ==================== ENUMS ====================
+
+enum PoolStatus {
+  OPEN
+  CLOSED
+  VALIDATED
+  CANCELLED
+}
+
+enum Category {
+  GENERAL
+  SPORTS
+  CRYPTO
+  POLITICS
+  ENTERTAINMENT
+  TECHNOLOGY
+  GAMING
+  FINANCE
+  OTHER
+}
+
+enum TransactionType {
+  POOL_CREATED
+  BET_PLACED
+  POOL_CLOSED
+  POOL_VALIDATED
+  POOL_CANCELLED
+  REWARDS_DISTRIBUTED
+  JUROR_REGISTERED
+  JUROR_VOTED
+  OTHER
+}
+
+enum TxStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+

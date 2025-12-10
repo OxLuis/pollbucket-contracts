@@ -360,3 +360,4 @@ El contrato valida:
 | `setPremiumFee(fee)` | Admin: cambiar fee premium |
 | `setPremiumEnabled(enabled)` | Admin: habilitar/deshabilitar premium |
 
+
